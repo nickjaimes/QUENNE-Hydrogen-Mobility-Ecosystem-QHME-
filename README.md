@@ -1,4 +1,5 @@
-   •   Generate the actual visual banner image
+    <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a4765431-5d39-4cd5-81b7-391127a3542b" />
+
 # QUENNE-Hydrogen-Mobility-Ecosystem-QHME-
 
 # QUENNE Hydrogen Mobility Ecosystem (QHME)
