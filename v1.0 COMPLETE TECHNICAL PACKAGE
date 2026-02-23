@@ -1,0 +1,261 @@
+v1.0 COMPLETE TECHNICAL PACKAGE
+
+This includes:
+	1.	SECURITY.md
+	2.	API_CONTRACT_MASTER_TABLE.md
+	3.	EVENT_SCHEMA_REGISTRY.json
+	4.	OPENAPI.yaml (OpenAPI 3.1 baseline)
+
+All aligned with your previously defined QHME API v1.0.
+
+⸻
+
+📁 Repository Structure
+
+QHME/
+ ├── README.md
+ ├── ARCHITECTURE.md
+ ├── SECURITY.md
+ ├── API_CONTRACT_MASTER_TABLE.md
+ ├── EVENT_SCHEMA_REGISTRY.json
+ ├── openapi.yaml
+ └── LICENSE
+
+
+⸻
+
+1️⃣ SECURITY.md
+
+# QHME Security Specification v1.0
+
+## 1. Security Principles
+
+- Safety-first enforcement
+- Zero trust between domains
+- Cryptographic identity for all actors
+- Immutable audit trails
+- OTA updates with rollback guarantees
+
+---
+
+## 2. Threat Model
+
+### 2.1 Vehicle Domain Threats
+- Telemetry spoofing
+- Command injection
+- Firmware tampering
+- Sensor falsification
+
+### 2.2 Cloud Domain Threats
+- Credential compromise
+- Privilege escalation
+- Optimization manipulation
+
+### 2.3 Station Domain Threats
+- Fake station status
+- Queue manipulation
+- Supply data falsification
+
+---
+
+## 3. Identity & Authentication
+
+### Vehicle ↔ Cloud
+- mTLS (mutual TLS)
+- Hardware-bound private key
+- Short-lived access tokens (≤15 min)
+
+### Operator Access
+- OIDC + MFA
+- Role-Based Access Control
+- Session anomaly detection
+
+### Station Gateways
+- X.509 certificate
+- Fleet-bound registration
+
+---
+
+## 4. Authorization Model
+
+RBAC + ABAC hybrid.
+
+Roles:
+- FLEET_OPERATOR_READ
+- FLEET_OPERATOR_COMMAND_LIMITED
+- SAFETY_ADMIN
+- OTA_RELEASE_MANAGER
+- AUDIT_VIEWER
+
+All commands pass through Policy Engine:
+- Safety state validation
+- Time-window validation
+- Role validation
+- Risk-level validation
+
+---
+
+## 5. OTA Security
+
+- Signed firmware (Ed25519 or equivalent)
+- Staged deployment
+- Rollback partition
+- Health verification post-install
+- Auto-revert if anomaly detected
+
+---
+
+## 6. Safety Isolation Guarantee
+
+Optimization logic CANNOT:
+- Override hydrogen isolation
+- Disable HV cutoff
+- Modify sensor thresholds remotely
+
+Hard safety logic remains on Vehicle Edge Controller.
+
+---
+
+## 7. Audit & Compliance
+
+Every command generates:
+- Request ID
+- Actor ID
+- Policy decision result
+- Timestamp
+- Immutable ledger entry
+
+Logs retained minimum 7 years (configurable by jurisdiction).
+
+
+⸻
+
+2️⃣ API_CONTRACT_MASTER_TABLE.md
+
+# QHME API Contract Master Table v1.0
+
+| Domain | Endpoint | Method | Auth Required | Risk Level | Description |
+|--------|----------|--------|---------------|------------|-------------|
+| Fleet | /fleet/vehicles | POST | ADMIN | Medium | Register vehicle |
+| Telemetry | /telemetry/vehicles/{id}/snapshot | POST | VEHICLE | Low | Push telemetry |
+| Safety | /safety/events | POST | VEHICLE | Critical | Safety event ingest |
+| Safety | /incidents/{id}/ack | POST | OPERATOR | High | Acknowledge incident |
+| Command | /command/vehicles/{id}/policy | POST | OPERATOR | High | Set drive policy |
+| Command | /command/vehicles/{id}/ota/deploy | POST | OTA_MANAGER | High | Deploy OTA update |
+| Fleet | /fleet/{id}/optimization/plan | GET | OPERATOR | Medium | Get optimization plan |
+| Fleet | /fleet/{id}/optimization/constraints | POST | OPERATOR | Medium | Submit constraints |
+| Station | /stations/{id}/status | POST | STATION | Medium | Station status push |
+| Station | /stations/{id}/reservations | POST | OPERATOR | Medium | Reserve slot |
+
+
+⸻
+
+3️⃣ EVENT_SCHEMA_REGISTRY.json
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "registry_version": "1.0",
+  "topics": {
+    "qhme.v1.telemetry.snapshot": {
+      "type": "object",
+      "required": ["vehicle_id", "ts", "energy"],
+      "properties": {
+        "vehicle_id": {"type": "string"},
+        "ts": {"type": "string", "format": "date-time"},
+        "energy": {
+          "type": "object",
+          "properties": {
+            "h2_kg_remaining": {"type": "number"},
+            "soc_pct": {"type": "number"},
+            "stack_kw": {"type": "number"}
+          }
+        }
+      }
+    },
+    "qhme.v1.safety.event": {
+      "type": "object",
+      "required": ["vehicle_id", "severity", "event_type"],
+      "properties": {
+        "vehicle_id": {"type": "string"},
+        "severity": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+        "event_type": {"type": "string"}
+      }
+    },
+    "qhme.v1.optimization.plan": {
+      "type": "object",
+      "properties": {
+        "horizon_min": {"type": "integer"},
+        "recommendations": {"type": "array"}
+      }
+    }
+  }
+}
+
+
+⸻
+
+4️⃣ openapi.yaml (OpenAPI 3.1)
+
+openapi: 3.1.0
+info:
+  title: QHME API
+  version: 1.0.0
+  description: QUENNE Hydrogen Mobility Ecosystem API
+
+servers:
+  - url: https://api.qhme.io/api/v1
+
+paths:
+  /fleet/vehicles:
+    post:
+      summary: Register vehicle
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vehicle_id, model]
+              properties:
+                vehicle_id:
+                  type: string
+                model:
+                  type: string
+      responses:
+        "200":
+          description: Vehicle registered
+
+  /telemetry/vehicles/{vehicle_id}/snapshot:
+    post:
+      summary: Push telemetry snapshot
+      parameters:
+        - in: path
+          name: vehicle_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Accepted
+
+  /safety/events:
+    post:
+      summary: Safety event ingestion
+      responses:
+        "200":
+          description: Safety event recorded
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
