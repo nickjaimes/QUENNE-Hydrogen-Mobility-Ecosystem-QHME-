@@ -1,0 +1,461 @@
+QUENNE Hydrogen Mobility Ecosystem (QHME)
+
+Technical API Specification v1.0
+
+Document ID: QHME-API-1.0
+Scope: Vehicle ↔ Fleet ↔ Infrastructure ↔ Command Center
+Transport: HTTPS REST + WebSocket (real-time) + Event Bus (pub/sub)
+Auth: OAuth2 / mTLS (fleet), short-lived tokens (vehicle), signed events
+Time: ISO-8601 UTC, monotonic timestamps for control loops
+Units: SI (kg, kPa/bar, kW, kWh, °C)
+
+⸻
+
+0. Design Principles
+
+0.1 Safety First
+   •   Safety events are immutable, highest priority.
+   •   Optimization modules cannot override safety constraints.
+   •   Remote actions are policy-gated, audited, and rate-limited.
+
+0.2 Dual-Plane APIs
+	1.	Telemetry Plane (read-heavy, streaming)
+	2.	Command Plane (write operations, strict controls)
+
+0.3 Vendor Abstraction
+
+All hardware-specific data is mapped into standard objects:
+   •   fuel_cell_stack, hydrogen_storage, power_electronics, motor_drive, thermal_loop
+
+⸻
+
+1. System Actors & Trust Domains
+
+Actors
+   •   Vehicle Edge Controller (VEC): onboard QCO/Q-HDU controller
+   •   Fleet Cloud Orchestrator (FCO): centralized optimization
+   •   Station Gateway (SGW): hydrogen station interface
+   •   Operator Console (OPS): human authority UI
+   •   Audit & Compliance Service (ACS): immutable logging
+
+Trust Domains
+   •   Vehicle domain (high integrity)
+   •   Cloud domain (scalable compute)
+   •   Station domain (semi-trusted)
+   •   Human console (authenticated, policy constrained)
+
+⸻
+
+2. API Surface Overview
+
+REST Base
+
+/api/v1
+
+WebSocket
+
+/ws/v1/stream
+
+Event Bus Topics (logical)
+
+qhme.v1.*
+
+⸻
+
+3. Common Conventions
+
+3.1 Standard Headers
+   •   X-Request-Id: UUID
+   •   X-Vehicle-Id: string (when applicable)
+   •   X-Fleet-Id: string
+   •   X-Signature: request signature (optional if mTLS)
+
+3.2 Standard Response Envelope
+{
+  "ok": true,
+  "data": {},
+  "error": null,
+  "meta": {
+    "request_id": "uuid",
+    "ts": "2026-02-23T04:10:00Z"
+  }
+}
+
+3.3 Error Object
+{
+  "code": "SAFETY_POLICY_DENIED",
+  "message": "Command denied by safety policy.",
+  "details": {"rule_id": "POLICY-LEAK-001"}
+}
+
+
+⸻
+
+4. Identity & Provisioning
+
+4.1 Register Vehicle (Fleet Admin)
+
+POST /api/v1/fleet/vehicles
+
+Request
+
+{
+  "vehicle_id": "Q-BUS07",
+  "vin_hash": "sha256:...",
+  "model": "QHDU-FCEV-Platform-A",
+  "capabilities": ["FCEV", "REGEN", "OTA_SAFE", "H2_SENSOR_TRIPLE"],
+  "public_key": "pem..."
+}
+
+Response
+
+{
+  "ok": true,
+  "data": {
+    "vehicle_id": "Q-BUS07",
+    "assigned_fleet_id": "FLEET-OSAKA-01",
+    "policy_profile": "CITY_BUS_DEFAULT"
+  },
+  "error": null,
+  "meta": {"request_id":"...","ts":"..."}
+}
+
+
+⸻
+
+5. Telemetry APIs (Vehicle → Cloud)
+
+5.1 Push Snapshot Telemetry
+
+POST /api/v1/telemetry/vehicles/{vehicle_id}/snapshot
+
+Request
+
+{
+  "ts": "2026-02-23T04:10:00Z",
+  "location": {"lat": 34.6937, "lon": 135.5023, "speed_kph": 32},
+  "energy": {
+    "h2_kg_remaining": 3.8,
+    "soc_pct": 62.1,
+    "stack_kw": 42.0,
+    "battery_kw": 8.5,
+    "regen_kw": 0.0
+  },
+  "thermal": {
+    "stack_c": 68.2,
+    "coolant_c": 61.4,
+    "inverter_c": 54.0,
+    "motor_c": 58.7
+  },
+  "health": {
+    "stack_soh_pct": 91.0,
+    "battery_soh_pct": 88.0,
+    "compressor_soh_pct": 93.5
+  }
+}
+
+5.2 Stream Telemetry (WebSocket)
+
+GET /ws/v1/stream?fleet_id=FLEET-OSAKA-01&channels=telemetry,safety,station
+
+Message (example)
+
+{
+  "type": "telemetry.delta",
+  "vehicle_id": "Q-BUS07",
+  "ts": "2026-02-23T04:10:01Z",
+  "delta": {"energy.stack_kw": 44.2, "energy.battery_kw": 6.1}
+}
+
+
+⸻
+
+6. Safety APIs (Highest Priority)
+
+6.1 Safety Event Ingest
+
+POST /api/v1/safety/events
+
+Request
+
+
+{
+  "ts": "2026-02-23T04:10:02Z",
+  "vehicle_id": "Q-BUS07",
+  "severity": "CRITICAL",
+  "event_type": "H2_LEAK_DETECTED",
+  "signals": {
+    "h2_ppm": 6500,
+    "pressure_drop_bar_per_min": 12.5,
+    "valve_state": "CLOSED"
+  },
+  "actions_taken": ["TANK_ISOLATION", "HV_CUTOFF", "VENTING_CONTROLLED"],
+  "policy_version": "POLICY-1.0.7"
+}
+
+6.2 Acknowledge + Dispatch Workflow (Operator)
+
+POST /api/v1/incidents/{incident_id}/ack
+
+{"operator_id":"OPS-031","note":"Dispatch maintenance team. Vehicle in safe state."}
+
+
+⸻
+
+7. Command APIs (Cloud/Operator → Vehicle)
+
+Commands are policy-evaluated and may be denied. No raw actuator control is exposed.
+
+7.1 Set Drive Policy Profile
+
+POST /api/v1/command/vehicles/{vehicle_id}/policy
+
+{
+  "policy_profile": "ECO_LIMITED_TORQUE",
+  "effective_from": "2026-02-23T04:15:00Z",
+  "ttl_sec": 3600,
+  "reason": "Peak demand efficiency"
+}
+
+7.2 Request Diagnostic Bundle
+
+POST /api/v1/command/vehicles/{vehicle_id}/diagnostics/request
+
+{
+  "bundle": ["STACK_HEALTH", "THERMAL_HISTORY", "H2_SENSORS", "DCBUS_EVENTS"],
+  "window_sec": 900
+}
+
+7.3 Safe Remote Update (OTA)
+
+POST /api/v1/command/vehicles/{vehicle_id}/ota/deploy
+
+{
+  "release_id": "QHME-OTA-2026.02.23-1",
+  "staged": true,
+  "max_risk": "LOW",
+  "rollback_enabled": true
+}
+
+
+⸻
+
+8. Fleet Optimization APIs
+
+8.1 Get Fleet Optimization Plan
+
+GET /api/v1/fleet/{fleet_id}/optimization/plan?horizon_min=180
+
+Response
+
+{
+  "ok": true,
+  "data": {
+    "horizon_min": 180,
+    "recommendations": [
+      {
+        "vehicle_id": "Q-BUS07",
+        "route_id": "OSK-22A",
+        "refuel_window": {"start":"2026-02-23T05:10:00Z","end":"2026-02-23T05:40:00Z"},
+        "target_soc_pct": 55,
+        "target_h2_kg_min": 2.0,
+        "policy_profile": "CITY_BUS_DEFAULT"
+      }
+    ]
+  },
+  "error": null,
+  "meta": {"request_id":"...","ts":"..."}
+}
+
+8.2 Submit Constraints (Human Authority)
+
+POST /api/v1/fleet/{fleet_id}/optimization/constraints
+
+{
+  "constraints": [
+    {"type":"MAX_DOWNTIME_PER_VEHICLE_MIN","value":30},
+    {"type":"MIN_SERVICE_COVERAGE_PCT","value":92},
+    {"type":"SAFETY_OVERRIDE","value":"ALWAYS"}
+  ]
+}
+
+
+⸻
+
+9. Station & Hydrogen Grid APIs
+
+9.1 Station Status (Station → Cloud)
+
+POST /api/v1/stations/{station_id}/status
+
+{
+  "ts":"2026-02-23T04:10:00Z",
+  "station_id":"H2-5149",
+  "available": true,
+  "queue": {"vehicles_waiting": 3, "avg_wait_min": 12},
+  "supply": {"h2_kg_available": 820},
+  "dispensers": [{"id":"D1","state":"READY"},{"id":"D2","state":"BUSY"}]
+}
+
+9.2 Reserve Refuel Slot (Fleet → Station)
+
+POST /api/v1/stations/{station_id}/reservations
+
+{
+  "vehicle_id":"Q-BUS07",
+  "window":{"start":"2026-02-23T05:10:00Z","end":"2026-02-23T05:25:00Z"},
+  "requested_h2_kg": 8.0,
+  "priority":"NORMAL"
+}
+
+
+⸻
+
+10. Data Model: Core Objects
+
+10.1 Vehicle Object
+
+{
+  "vehicle_id":"Q-BUS07",
+  "type":"BUS",
+  "capabilities":["FCEV","REGEN","OTA_SAFE"],
+  "firmware":{"qco":"1.0.3","vec":"1.0.1"},
+  "policy_profile":"CITY_BUS_DEFAULT"
+}
+
+10.2 Fuel Cell Stack Health
+
+{
+  "stack_id":"STACK-A-0091",
+  "soh_pct": 91.0,
+  "voltage_v": 325.0,
+  "current_a": 140.0,
+  "degradation_flags":["DRY_OUT_RISK_LOW"],
+  "rul_hours_est": 4200
+}
+
+10.3 Safety Incident
+
+{
+  "incident_id":"INC-20260223-0008",
+  "vehicle_id":"Q-BUS07",
+  "severity":"CRITICAL",
+  "state":"MITIGATED",
+  "events":["H2_LEAK_DETECTED","HV_CUTOFF"],
+  "actions":["TANK_ISOLATION","VENTING_CONTROLLED"]
+}
+
+
+⸻
+
+11. Event Bus Topics (Pub/Sub)
+
+11.1 Telemetry
+   •   qhme.v1.telemetry.snapshot
+   •   qhme.v1.telemetry.delta
+
+11.2 Safety
+   •   qhme.v1.safety.event
+   •   qhme.v1.safety.incident
+
+11.3 Optimization
+   •   qhme.v1.optimization.plan
+   •   qhme.v1.optimization.constraint
+
+11.4 Station Grid
+   •   qhme.v1.station.status
+   •   qhme.v1.station.reservation
+
+Event Envelope
+
+{
+  "event_id":"uuid",
+  "topic":"qhme.v1.safety.event",
+  "ts":"2026-02-23T04:10:02Z",
+  "producer":"VEC",
+  "payload":{ }
+}
+
+
+⸻
+
+12. Security Specification (Baseline)
+
+12.1 Authentication
+   •   Vehicle ↔ Cloud: mTLS + short-lived tokens
+   •   Operator: OIDC + MFA
+   •   Station: mTLS + station certificate
+
+12.2 Authorization
+   •   Policy engine: RBAC + ABAC
+   •   Example roles:
+      •   FLEET_OPERATOR_READ
+      •   FLEET_OPERATOR_COMMAND_LIMITED
+      •   SAFETY_ADMIN
+      •   OTA_RELEASE_MANAGER
+
+12.3 Audit
+
+All command-plane calls produce:
+   •   immutable audit record
+   •   request_id, operator id, policy decision, outcome
+
+⸻
+
+13. Policy Engine & Deny Reasons
+
+Common deny codes:
+   •   SAFETY_POLICY_DENIED
+   •   VEHICLE_STATE_LOCKED
+   •   COMMAND_TTL_EXPIRED
+   •   ROLE_NOT_AUTHORIZED
+   •   RATE_LIMITED
+   •   SIGNATURE_INVALID
+
+⸻
+
+14. Compliance & Reporting APIs
+
+14.1 Emissions Saved Report (Fleet)
+
+GET /api/v1/fleet/{fleet_id}/reports/emissions?from=...&to=...
+
+Returns CO₂-equivalent avoided (methodology configured by fleet).
+
+⸻
+
+15. Versioning & Compatibility
+   •   REST versioned by path: /api/v1
+   •   Event topics versioned: qhme.v1.*
+   •   Backward-compatible changes only within v1.x
+   •   Breaking changes require /v2
+
+⸻
+
+Appendix A — Minimal Endpoint Index
+
+Fleet
+   •   POST /fleet/vehicles
+   •   GET /fleet/{fleet_id}/vehicles
+   •   GET /fleet/{fleet_id}/optimization/plan
+   •   POST /fleet/{fleet_id}/optimization/constraints
+
+Telemetry
+   •   POST /telemetry/vehicles/{vehicle_id}/snapshot
+   •   GET /ws/v1/stream
+
+Safety
+   •   POST /safety/events
+   •   POST /incidents/{incident_id}/ack
+   •   GET /incidents?state=...
+
+Command
+   •   POST /command/vehicles/{vehicle_id}/policy
+   •   POST /command/vehicles/{vehicle_id}/diagnostics/request
+   •   POST /command/vehicles/{vehicle_id}/ota/deploy
+
+Stations
+   •   POST /stations/{station_id}/status
+   •   POST /stations/{station_id}/reservations
+
+
