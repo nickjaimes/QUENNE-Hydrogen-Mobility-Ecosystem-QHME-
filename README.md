@@ -1,3 +1,4 @@
+   •   Generate the actual visual banner image
 # QUENNE-Hydrogen-Mobility-Ecosystem-QHME-
 
 # QUENNE Hydrogen Mobility Ecosystem (QHME)
