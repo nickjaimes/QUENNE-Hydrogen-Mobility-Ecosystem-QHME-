@@ -227,7 +227,7 @@ MIT License (or update as required)
 
 Nicolas E. Santiago  
 QUENNE Research Initiative  
-Osaka, Japan  
+Asaka City, Japan  
 
 ---
 
